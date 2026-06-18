@@ -78,6 +78,61 @@ def clean_html(text):
     return re.sub(r"\s+", " ", text).strip()
 
 
+def summarize_text(text, max_len=120):
+    text = clean_html(text)
+    if not text:
+        return ""
+
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) <= max_len:
+        return text
+
+    return text[:max_len].rstrip(" ,.;:，。；：") + "..."
+
+
+def extract_meta_content(html, property_name):
+    patterns = [
+        rf'<meta[^>]+property=["\']{re.escape(property_name)}["\'][^>]+content=["\']([^"\']+)["\']',
+        rf'<meta[^>]+name=["\']{re.escape(property_name)}["\'][^>]+content=["\']([^"\']+)["\']',
+        rf'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']{re.escape(property_name)}["\']',
+        rf'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']{re.escape(property_name)}["\']',
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, html, flags=re.IGNORECASE)
+        if match:
+            return clean_html(match.group(1))
+
+    return ""
+
+
+def fetch_page_summary(url):
+    if not url:
+        return ""
+
+    try:
+        html = http_get_text(url, timeout=8)
+    except Exception:
+        return ""
+
+    summary = (
+        extract_meta_content(html, "og:description")
+        or extract_meta_content(html, "description")
+        or extract_meta_content(html, "twitter:description")
+    )
+
+    if summary:
+        return summarize_text(summary)
+
+    paragraphs = re.findall(r"<p[^>]*>(.*?)</p>", html, flags=re.IGNORECASE | re.DOTALL)
+    for paragraph in paragraphs:
+        summary = summarize_text(paragraph)
+        if len(summary) >= 40:
+            return summary
+
+    return ""
+
+
 def fetch_alapi_morning_news():
     if not ALAPI_TOKEN:
         raise RuntimeError("Missing ALAPI_TOKEN")
@@ -169,6 +224,7 @@ def fetch_hacker_news_ai_items():
                 {
                     "title": title,
                     "link": link,
+                    "summary": fetch_page_summary(link) or summarize_text(description),
                 }
             )
 
@@ -178,10 +234,12 @@ def fetch_hacker_news_ai_items():
             link = clean_html(item.findtext("link", default=""))
 
             if title and all(existing["title"] != title for existing in items):
+                description = clean_html(item.findtext("description", default=""))
                 items.append(
                     {
                         "title": title,
                         "link": link,
+                        "summary": fetch_page_summary(link) or summarize_text(description),
                     }
                 )
 
@@ -218,8 +276,10 @@ def build_message(world_news, ai_items):
             title = item["title"]
             link = item["link"]
             lines.append(f"{index}. {title}")
+            if item.get("summary"):
+                lines.append(f"   摘要：{item['summary']}")
             if link:
-                lines.append(f"   {link}")
+                lines.append(f"   链接：{link}")
     else:
         lines.append("暂无 AI 新闻。")
 
